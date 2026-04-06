@@ -1,0 +1,9 @@
+{
+  "appId": "com.yourname.ytmusic",
+  "appName": "YTMusic",
+  "webDir": "out",
+  "server": {
+    "url": "http://192.168.x.x:3000",
+    "cleartext": true
+  }
+}
