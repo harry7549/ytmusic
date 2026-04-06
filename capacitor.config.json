@@ -3,7 +3,7 @@
   "appName": "YTMusic",
   "webDir": "public",
   "server": {
-    "url": "https://YOUR_DEPLOYED_URL",
+    "url": "https://ytmusic-production-8e8e.up.railway.app",
     "cleartext": false
   }
 }

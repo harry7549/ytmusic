@@ -1,8 +1,61 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import https from 'https';
 
-const execAsync = promisify(exec);
+const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+const CLIENT_CTX = {
+  clientName: 'WEB',
+  clientVersion: '2.20240101.00.00',
+  hl: 'en',
+  gl: 'US',
+};
+
+function httpsPost(path: string, body: object): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = https.request(
+      {
+        hostname: 'www.youtube.com',
+        path,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(data),
+        },
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (c) => (raw += c));
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(raw));
+          } catch (e) {
+            reject(new Error('Failed to parse YouTube response'));
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+function parseResults(contents: any[]): any[] {
+  const results: any[] = [];
+  for (const item of contents) {
+    const v = item.videoRenderer;
+    if (!v?.videoId) continue;
+    const id = v.videoId;
+    results.push({
+      id,
+      title: v.title?.runs?.[0]?.text ?? '',
+      author: v.ownerText?.runs?.[0]?.text ?? '',
+      thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      duration: v.lengthText?.simpleText ?? '',
+    });
+  }
+  return results;
+}
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get('q');
@@ -10,34 +63,28 @@ export async function GET(req: NextRequest) {
   if (!q) return NextResponse.json({ results: [] });
 
   const pageSize = 20;
-  const start = (page - 1) * pageSize + 1;
-  const end = page * pageSize;
 
   try {
-    const { stdout } = await execAsync(
-      `yt-dlp "ytsearch${end}:${q.replace(/"/g, '')}" --dump-json --flat-playlist --no-warnings --playlist-start ${start} --playlist-end ${end}`,
-      { timeout: 30000 }
+    const body = {
+      context: { client: CLIENT_CTX },
+      query: q,
+      params: 'EgIQAQ%3D%3D', // videos only filter
+    };
+
+    const json = await httpsPost(
+      `/youtubei/v1/search?key=${INNERTUBE_KEY}`,
+      body
     );
 
-    const results = stdout
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          const v = JSON.parse(line);
-          return {
-            id: v.id,
-            title: v.title,
-            author: v.uploader ?? v.channel ?? '',
-            thumbnail: v.thumbnail ?? `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
-            duration: v.duration_string ?? '',
-          };
-        } catch { return null; }
-      })
-      .filter(Boolean);
+    const contents: any[] =
+      json?.contents?.twoColumnSearchResultsRenderer
+        ?.primaryContents?.sectionListRenderer?.contents?.[0]
+        ?.itemSectionRenderer?.contents ?? [];
 
-    return NextResponse.json({ results, hasMore: results.length === pageSize });
+    const all = parseResults(contents);
+    const slice = all.slice((page - 1) * pageSize, page * pageSize);
+
+    return NextResponse.json({ results: slice, hasMore: slice.length === pageSize });
   } catch (e: any) {
     console.error('[search error]', e?.message ?? e);
     return NextResponse.json({ error: e?.message ?? 'Search failed' }, { status: 500 });
