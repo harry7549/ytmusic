@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import ytdl from '@distube/ytdl-core';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 export async function GET(req: NextRequest) {
   const videoId = req.nextUrl.searchParams.get('id');
@@ -8,38 +11,32 @@ export async function GET(req: NextRequest) {
 
   if (!videoId) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
+
+  // build yt-dlp format selector
+  let formatSelector: string;
+  if (mode === 'video') {
+    const heightMap: Record<string, number> = { '1080': 1080, '720': 720, '480': 480, '360': 360 };
+    const maxH = heightMap[quality] ?? 1080;
+    formatSelector = `bestvideo[height<=${maxH}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${maxH}][ext=mp4]/best`;
+  } else {
+    const abrMap: Record<string, string> = { best: 'bestaudio', medium: 'bestaudio[abr<=128]', low: 'bestaudio[abr<=64]' };
+    formatSelector = abrMap[quality] ?? 'bestaudio';
+  }
+
   try {
-    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
-    const formats = info.formats;
+    const { stdout } = await execFileAsync('yt-dlp', [
+      '--no-playlist',
+      '-f', formatSelector,
+      '-g',           // print URL only
+      '--no-warnings',
+      url,
+    ], { timeout: 15000 });
 
-    let chosen: ytdl.videoFormat | undefined;
+    const streamUrl = stdout.trim().split('\n')[0];
+    if (!streamUrl) return NextResponse.json({ error: 'No stream URL found' }, { status: 404 });
 
-    if (mode === 'video') {
-      const heightMap: Record<string, number> = {
-        '1080': 1080, '720': 720, '480': 480, '360': 360,
-      };
-      const maxHeight = heightMap[quality] ?? 1080;
-      // prefer progressive (video+audio) formats first
-      chosen =
-        formats
-          .filter((f) => f.hasVideo && f.hasAudio && (f.height ?? 0) <= maxHeight)
-          .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0] ??
-        formats
-          .filter((f) => f.hasVideo && (f.height ?? 0) <= maxHeight)
-          .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0];
-    } else {
-      const abrMap: Record<string, number> = { best: 9999, medium: 128, low: 64 };
-      const maxAbr = abrMap[quality] ?? 9999;
-      chosen =
-        formats
-          .filter((f) => f.hasAudio && !f.hasVideo && (f.audioBitrate ?? 0) <= maxAbr)
-          .sort((a, b) => (b.audioBitrate ?? 0) - (a.audioBitrate ?? 0))[0] ??
-        formats.filter((f) => f.hasAudio).sort((a, b) => (b.audioBitrate ?? 0) - (a.audioBitrate ?? 0))[0];
-    }
-
-    if (!chosen?.url) return NextResponse.json({ error: 'No stream found' }, { status: 404 });
-
-    return NextResponse.json({ url: chosen.url, mode, mimeType: chosen.mimeType });
+    return NextResponse.json({ url: streamUrl, mode });
   } catch (e: any) {
     console.error('[stream error]', e?.message ?? e);
     return NextResponse.json({ error: e?.message ?? 'Stream extraction failed' }, { status: 500 });
