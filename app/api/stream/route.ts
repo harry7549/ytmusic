@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const { stdout } = await execFileAsync('yt-dlp', [
+    const { stdout } = await execFileAsync('/usr/local/bin/yt-dlp', [
       '--no-playlist',
       '-f', formatSelector,
       '-g',           // print URL only
